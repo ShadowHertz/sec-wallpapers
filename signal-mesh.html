@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal Mesh</title>
+<style>
+  :root {
+    --bg-1: #05080f;
+    --bg-2: #0a1424;
+    --accent: #3ef0c5;
+    --text: #cfe7ff;
+    --dim: rgba(207, 231, 255, 0.45);
+  }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: radial-gradient(ellipse at 30% 20%, var(--bg-2), var(--bg-1) 70%);
+    font-family: "Segoe UI", "Inter", system-ui, sans-serif;
+    cursor: crosshair; user-select: none;
+  }
+  canvas { position: fixed; inset: 0; display: block; }
+  #hud { position: fixed; left: 56px; bottom: 64px; color: var(--text); pointer-events: none; text-shadow: 0 0 18px rgba(62, 240, 197, 0.25); }
+  #time { font-size: 96px; font-weight: 200; letter-spacing: 2px; line-height: 1; }
+  #time .sec { font-size: 40px; color: var(--accent); margin-left: 8px; }
+  #date { margin-top: 10px; font-size: 18px; letter-spacing: 6px; text-transform: uppercase; color: var(--dim); }
+  #hint { position: fixed; right: 40px; bottom: 32px; font-size: 12px; letter-spacing: 3px; color: var(--dim); text-transform: uppercase; pointer-events: none; transition: opacity 2s; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="time">--:--<span class="sec">--</span></div>
+  <div id="date"></div>
+</div>
+<div id="hint">move · click to pulse · right-click to switch mode</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let W, H;
+
+  // ---- Performance settings (lower = lighter) ----
+  const PERF = {
+    fps: 30,            // frame cap; 30 is smooth for a wallpaper
+    resolution: 1,      // render scale (1 = native CSS pixels, ignores Windows display scaling)
+    maxParticles: 260,  // hard cap so big/4K screens don't explode the link count
+  };
+
+  // ---- Look settings ----
+  const CFG = {
+    density: 11000,      // px² per particle (lower = more particles)
+    linkDist: 140,       // max distance for connecting lines
+    mouseRadius: 200,    // influence radius around cursor
+    maxSpeed: 0.45,
+  };
+
+  const MODES = ['repel', 'attract', 'orbit'];
+  let mode = 0;
+  const mouse = { x: -9999, y: -9999, active: false };
+  let particles = [];
+  const pulses = [];
+  const colors = [[62, 240, 197], [74, 141, 255]]; // teal, blue
+
+  function resize() {
+    W = innerWidth; H = innerHeight;
+    canvas.width = W * PERF.resolution; canvas.height = H * PERF.resolution;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.setTransform(PERF.resolution, 0, 0, PERF.resolution, 0, 0);
+    const target = Math.min(PERF.maxParticles, Math.round((W * H) / CFG.density));
+    while (particles.length < target) particles.push(makeParticle());
+    particles.length = target;
+  }
+
+  function makeParticle(x, y) {
+    const a = Math.random() * Math.PI * 2, s = 0.1 + Math.random() * CFG.maxSpeed;
+    return {
+      x: x ?? Math.random() * W, y: y ?? Math.random() * H,
+      vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+      r: 0.8 + Math.random() * 1.6,
+      hue: Math.random() < 0.75 ? 0 : 1,
+      glow: 0,
+    };
+  }
+
+  // ---- Input ----
+  addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; mouse.active = true; });
+  addEventListener('mouseleave', () => { mouse.active = false; mouse.x = mouse.y = -9999; });
+  addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    pulses.push({ x: e.clientX, y: e.clientY, r: 0, life: 1 });
+    for (let i = 0; i < 6; i++) {
+      const p = makeParticle(e.clientX, e.clientY);
+      p.vx *= 4; p.vy *= 4; p.glow = 1; p.spark = true;
+      particles.push(p);
+    }
+    // sparks are temporary: trim back to the cap, oldest sparks first
+    const cap = Math.min(PERF.maxParticles, Math.round((W * H) / CFG.density)) + 30;
+    while (particles.length > cap) {
+      const i = particles.findIndex(p => p.spark);
+      particles.splice(i >= 0 ? i : 0, 1);
+    }
+  });
+  addEventListener('contextmenu', e => { e.preventDefault(); mode = (mode + 1) % MODES.length; flashHint('mode: ' + MODES[mode]); });
+  addEventListener('resize', resize);
+
+  const hint = document.getElementById('hint');
+  let hintTimer;
+  function flashHint(t) { hint.textContent = t; hint.style.opacity = 1; clearTimeout(hintTimer); hintTimer = setTimeout(() => hint.style.opacity = 0, 2500); }
+  setTimeout(() => hint.style.opacity = 0, 6000);
+
+  // ---- Clock ----
+  const timeEl = document.getElementById('time'), dateEl = document.getElementById('date');
+  function tickClock() {
+    const d = new Date();
+    const h = d.getHours() % 12 || 12, m = String(d.getMinutes()).padStart(2, '0'), s = String(d.getSeconds()).padStart(2, '0');
+    timeEl.innerHTML = `${h}:${m}<span class="sec">${s}</span>`;
+    dateEl.textContent = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  }
+  tickClock(); setInterval(tickClock, 1000);
+
+  // ---- Grid ----
+  let gridOffset = 0;
+  function drawGrid(dt) {
+    const size = 64;
+    gridOffset = (gridOffset + 0.08 * dt) % size;
+    ctx.strokeStyle = 'rgba(74, 141, 255, 0.045)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = -size + gridOffset; x < W; x += size) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+    for (let y = -size + gridOffset; y < H; y += size) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+    ctx.stroke();
+  }
+
+  // ---- Batched line drawing ----
+  // Instead of one stroke() per line (hundreds per frame), lines are sorted into
+  // a few alpha "buckets" per color and each bucket is stroked once.
+  const BUCKETS = 8;
+  const batches = colors.map(() => Array.from({ length: BUCKETS }, () => []));
+  function addLine(ci, alpha, x1, y1, x2, y2) {
+    const b = Math.min(BUCKETS - 1, Math.floor(alpha * BUCKETS));
+    if (b <= 0 && alpha < 0.02) return;
+    batches[ci][b].push(x1, y1, x2, y2);
+  }
+  function flushLines() {
+    ctx.lineWidth = 1;
+    batches.forEach((set, ci) => set.forEach((arr, b) => {
+      if (!arr.length) return;
+      ctx.strokeStyle = `rgba(${colors[ci]},${(b + 0.5) / BUCKETS})`;
+      ctx.beginPath();
+      for (let i = 0; i < arr.length; i += 4) { ctx.moveTo(arr[i], arr[i + 1]); ctx.lineTo(arr[i + 2], arr[i + 3]); }
+      ctx.stroke();
+      arr.length = 0;
+    }));
+  }
+
+  // ---- Main loop ----
+  const frameMs = 1000 / PERF.fps;
+  const linkSq = CFG.linkDist * CFG.linkDist;
+  let last = 0;
+  const grid = new Map();
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (document.hidden) { last = 0; return; }        // pause while covered/minimized
+    if (last && now - last < frameMs - 2) return;     // FPS cap
+    const dt = Math.min((now - (last || now)) / 16.67, 4); last = now;
+
+    ctx.clearRect(0, 0, W, H);
+    drawGrid(dt);
+
+    // Update
+    for (const p of particles) {
+      if (mouse.active) {
+        const dx = p.x - mouse.x, dy = p.y - mouse.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < CFG.mouseRadius * CFG.mouseRadius && d2 > 0.01) {
+          const dist = Math.sqrt(d2);
+          const f = (1 - dist / CFG.mouseRadius) * 0.6 * dt;
+          const nx = dx / dist, ny = dy / dist;
+          if (mode === 0) { p.vx += nx * f; p.vy += ny * f; }
+          else if (mode === 1) { p.vx -= nx * f * 0.5; p.vy -= ny * f * 0.5; }
+          else { p.vx += -ny * f * 0.7 - nx * f * 0.15; p.vy += nx * f * 0.7 - ny * f * 0.15; }
+          p.glow = Math.max(p.glow, 1 - dist / CFG.mouseRadius);
+        }
+      }
+      for (const pu of pulses) {
+        const dx = p.x - pu.x, dy = p.y - pu.y;
+        const dist = Math.hypot(dx, dy);
+        if (Math.abs(dist - pu.r) < 18 && dist > 0.1) {
+          p.vx += (dx / dist) * 1.2 * pu.life; p.vy += (dy / dist) * 1.2 * pu.life; p.glow = 1;
+        }
+      }
+      if (p.vx * p.vx + p.vy * p.vy > CFG.maxSpeed * CFG.maxSpeed) { const k = Math.pow(0.96, dt); p.vx *= k; p.vy *= k; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.glow *= Math.pow(0.96, dt);
+      if (p.x < -20) p.x = W + 20; else if (p.x > W + 20) p.x = -20;
+      if (p.y < -20) p.y = H + 20; else if (p.y > H + 20) p.y = -20;
+    }
+
+    // Links via spatial hash
+    const cell = CFG.linkDist;
+    grid.clear();
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
+      const k = ((p.x / cell) | 0) * 4096 + ((p.y / cell) | 0);
+      let b = grid.get(k); if (!b) grid.set(k, b = []);
+      b.push(i);
+    }
+    for (let i = 0; i < particles.length; i++) {
+      const a = particles[i];
+      const cx = (a.x / cell) | 0, cy = (a.y / cell) | 0;
+      for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+        const bucket = grid.get((cx + ox) * 4096 + (cy + oy));
+        if (!bucket) continue;
+        for (const j of bucket) {
+          if (j <= i) continue;
+          const b = particles[j];
+          const dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy;
+          if (d2 > linkSq) continue;
+          const g = Math.max(a.glow, b.glow);
+          const alpha = (1 - Math.sqrt(d2) / CFG.linkDist) * (0.18 + g * 0.6);
+          addLine(g > 0.3 ? 0 : 1, alpha, a.x, a.y, b.x, b.y);
+        }
+      }
+    }
+    if (mouse.active) {
+      const r = CFG.mouseRadius * 0.75;
+      for (const p of particles) {
+        const d = Math.hypot(p.x - mouse.x, p.y - mouse.y);
+        if (d < r) addLine(0, (1 - d / r) * 0.35, mouse.x, mouse.y, p.x, p.y);
+      }
+    }
+    flushLines();
+
+    // Particles: glows first, then dots, batched by color
+    for (const p of particles) {
+      if (p.glow > 0.05) {
+        ctx.fillStyle = `rgba(${colors[p.hue]},${p.glow * 0.15})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, (p.r + p.glow * 2) * 4, 0, 6.283); ctx.fill();
+      }
+    }
+    for (let ci = 0; ci < 2; ci++) {
+      ctx.fillStyle = `rgba(${colors[ci]},0.8)`;
+      ctx.beginPath();
+      for (const p of particles) {
+        if (p.hue !== ci) continue;
+        const r = p.r + p.glow * 2;
+        ctx.moveTo(p.x + r, p.y); ctx.arc(p.x, p.y, r, 0, 6.283);
+      }
+      ctx.fill();
+    }
+
+    // Pulses
+    for (let i = pulses.length - 1; i >= 0; i--) {
+      const pu = pulses[i];
+      pu.r += 7 * dt; pu.life -= 0.012 * dt;
+      if (pu.life <= 0) { pulses.splice(i, 1); continue; }
+      ctx.strokeStyle = `rgba(62,240,197,${pu.life * 0.6})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(pu.x, pu.y, pu.r, 0, 6.283); ctx.stroke();
+      ctx.strokeStyle = `rgba(74,141,255,${pu.life * 0.3})`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(pu.x, pu.y, pu.r * 0.7, 0, 6.283); ctx.stroke();
+    }
+  }
+
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
