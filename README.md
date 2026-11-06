@@ -7,7 +7,7 @@ A lightweight, interactive desktop wallpaper: a drifting teal-and-blue particle 
 ## Features
 - 🕸️ Particle network that links nearby nodes and reacts to your cursor
 - 🖱️ **Click** to send a pulse shockwave through the mesh
-- 🔁 **Right-click** to switch modes: repel → attract → orbit
+- 🔁 **Double-click** to switch modes: repel → attract → orbit (right-click also works in a browser)
 - 🕒 Built-in clock and date
 - ⚡ Tuned for low resource use: 30 FPS cap, particle cap, batched drawing, and it pauses when the desktop is covered
 

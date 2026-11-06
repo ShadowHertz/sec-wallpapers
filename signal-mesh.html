@@ -32,7 +32,7 @@
   <div id="time">--:--<span class="sec">--</span></div>
   <div id="date"></div>
 </div>
-<div id="hint">move · click to pulse · right-click to switch mode</div>
+<div id="hint">move · click to pulse · double-click to switch mode</div>
 
 <script>
 (() => {
@@ -101,7 +101,11 @@
       particles.splice(i >= 0 ? i : 0, 1);
     }
   });
-  addEventListener('contextmenu', e => { e.preventDefault(); mode = (mode + 1) % MODES.length; flashHint('mode: ' + MODES[mode]); });
+  // Lively/Wallpaper Engine don't forward right-click (Windows uses it for the desktop menu),
+  // so double-click is the main way to switch modes. Right-click still works in a browser.
+  function nextMode() { mode = (mode + 1) % MODES.length; flashHint('mode: ' + MODES[mode]); }
+  addEventListener('dblclick', nextMode);
+  addEventListener('contextmenu', e => { e.preventDefault(); nextMode(); });
   addEventListener('resize', resize);
 
   const hint = document.getElementById('hint');
